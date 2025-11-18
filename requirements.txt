@@ -1,0 +1,42 @@
+# V2D - Video to Dub Dependencies
+
+# Core ML frameworks
+torch>=2.0.0
+torchaudio>=2.0.0
+
+# Speech recognition
+faster-whisper>=0.10.0
+
+# Translation
+transformers>=4.35.0
+sentencepiece>=0.1.99
+
+# Audio separation
+demucs>=4.0.0
+
+# Text-to-speech
+TTS>=0.21.0  # Coqui TTS
+
+# Configuration
+pyyaml>=6.0
+jsonschema>=4.17.0
+
+# System monitoring
+psutil>=5.9.0
+pynvml>=11.5.0
+
+# Audio/Video processing
+ffmpeg-python>=0.2.0
+
+# Utilities
+numpy>=1.24.0
+scipy>=1.10.0
+
+# Testing
+pytest>=7.0.0
+pytest-cov>=4.0.0
+
+# Development
+black>=23.0.0
+ruff>=0.1.0
+mypy>=1.0.0

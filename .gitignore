@@ -1,0 +1,82 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+.Python
+build/
+develop-eggs/
+dist/
+downloads/
+eggs/
+.eggs/
+lib/
+lib64/
+parts/
+sdist/
+var/
+wheels/
+*.egg-info/
+.installed.cfg
+*.egg
+
+# Virtual environments
+venv/
+ENV/
+env/
+.venv/
+
+# IDE
+.idea/
+.vscode/
+*.swp
+*.swo
+*~
+
+# Testing
+.pytest_cache/
+.coverage
+htmlcov/
+.tox/
+.nox/
+
+# mypy
+.mypy_cache/
+.dmypy.json
+dmypy.json
+
+# Ruff
+.ruff_cache/
+
+# Jupyter
+.ipynb_checkpoints/
+
+# V2D specific
+data/jobs/*/temp/
+data/jobs/*/segments/
+data/cache/models/
+data/cache/voices/*.db
+logs/*.log
+
+# Temporary files
+*.tmp.*
+*.bak
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Model files (too large for git)
+*.pt
+*.pth
+*.bin
+*.onnx
+*.safetensors
+
+# Keep directory structure
+!data/input/.gitkeep
+!data/output/.gitkeep
+!data/jobs/.gitkeep
+!data/cache/models/.gitkeep
+!data/cache/voices/.gitkeep
+!logs/.gitkeep
