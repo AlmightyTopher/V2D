@@ -13,6 +13,7 @@ from pathlib import Path
 import numpy as np
 
 from v2d.core.job import Job
+from v2d.models.xtts import XTTSModel
 from v2d.stages.base import BaseStage, StageResult, ResourceRequirements
 
 
@@ -52,41 +53,26 @@ class SynthesizeStage(BaseStage):
             if not segments:
                 return StageResult.fail("No segments to synthesize")
 
-            # Import TTS library
             import torch
             import torchaudio
-            from TTS.api import TTS
 
-            # Determine device
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.logger.info(f"Using device: {device}")
-
-            # Initialize TTS model
-            self.logger.info("Loading XTTS model...")
-
-            # Use XTTS v2 for voice cloning capability
-            tts = TTS("tts_models/multilingual/multi-dataset/xtts_v2")
-            tts.to(device)
+            # Get or create XTTS model from registry
+            xtts = job.model_registry.get_or_create(
+                "xtts",
+                XTTSModel,
+                resource_manager=job.resource_manager,
+                sample_rate=sample_rate,
+            )
 
             # Extract a short reference clip from the original vocals for voice cloning
-            # Use first few seconds of vocals as reference
             self.logger.info("Extracting voice reference from original vocals...")
-            reference_path = self.get_artifact_path(job, "voice_reference.wav")
+            reference_path = xtts.extract_speaker_embedding(vocals_path, max_duration=6.0)
 
-            # Load vocals and extract reference clip (first 6 seconds)
-            waveform, orig_sr = torchaudio.load(str(vocals_path))
-
-            # Resample if needed
-            if orig_sr != sample_rate:
-                resampler = torchaudio.transforms.Resample(orig_sr, sample_rate)
-                waveform = resampler(waveform)
-
-            # Extract first 6 seconds (or full audio if shorter)
-            max_samples = 6 * sample_rate
-            reference_audio = waveform[:, :max_samples]
-
-            # Save reference clip
-            torchaudio.save(str(reference_path), reference_audio, sample_rate)
+            # Move reference to job artifacts directory
+            artifact_reference_path = self.get_artifact_path(job, "voice_reference.wav")
+            import shutil
+            shutil.move(str(reference_path), str(artifact_reference_path))
+            reference_path = artifact_reference_path
 
             # Synthesize each segment
             segment_audios: list[tuple[float, np.ndarray]] = []
@@ -104,25 +90,20 @@ class SynthesizeStage(BaseStage):
 
                 self.logger.debug(f"[{i+1}/{len(segments)}] {text[:50]}...")
 
-                # Generate speech
-                wav = tts.tts(
+                # Generate speech using model wrapper
+                result = xtts.synthesize(
                     text=text,
-                    speaker_wav=str(reference_path),
+                    speaker_wav=reference_path,
                     language="en",
                 )
 
-                # Convert to numpy array if needed
-                if isinstance(wav, list):
-                    wav = np.array(wav, dtype=np.float32)
-
                 # Track segment
-                segment_duration = len(wav) / sample_rate
-                total_generated_duration += segment_duration
-                segment_audios.append((start_time, wav))
+                total_generated_duration += result.duration
+                segment_audios.append((start_time, result.audio))
 
                 # Save individual segment
                 segment_path = job.files.get_segment_path(i, "wav")
-                segment_tensor = torch.tensor(wav).unsqueeze(0)
+                segment_tensor = torch.from_numpy(result.audio).unsqueeze(0)
                 torchaudio.save(str(segment_path), segment_tensor, sample_rate)
 
             if not segment_audios:
@@ -158,13 +139,8 @@ class SynthesizeStage(BaseStage):
                 combined = combined / max_val * 0.9
 
             # Save combined audio
-            combined_tensor = torch.tensor(combined).unsqueeze(0)
+            combined_tensor = torch.from_numpy(combined).unsqueeze(0)
             torchaudio.save(str(synthesized_path), combined_tensor, sample_rate)
-
-            # Clean up
-            del tts
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
             # Register artifacts
             job.add_artifact(

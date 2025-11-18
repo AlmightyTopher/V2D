@@ -7,10 +7,10 @@ from music and other background sounds.
 
 from __future__ import annotations
 
-import shutil
 from pathlib import Path
 
 from v2d.core.job import Job
+from v2d.models.demucs import DemucsModel
 from v2d.stages.base import BaseStage, StageResult, ResourceRequirements
 
 
@@ -25,11 +25,6 @@ class SeparateVocalsStage(BaseStage):
 
     name = "separate_vocals"
     dependencies = ["extract_audio"]
-
-    def __init__(self):
-        super().__init__()
-        self._model = None
-        self._device = None
 
     def execute(self, job: Job) -> StageResult:
         """Separate vocals from background audio."""
@@ -46,98 +41,45 @@ class SeparateVocalsStage(BaseStage):
         self.logger.info(f"Separating vocals using model: {config.model}")
 
         try:
-            # Import here to avoid loading at module level
+            # Get or create Demucs model from registry
+            demucs = job.model_registry.get_or_create(
+                "demucs",
+                DemucsModel,
+                resource_manager=job.resource_manager,
+                model_name=config.model,
+                shifts=config.shifts,
+                overlap=config.overlap,
+            )
+
+            # Determine output channels
+            output_channels = job.config.pipeline.extract_audio.channels
+
+            # Perform separation using the model wrapper
+            result = demucs.separate(input_path, output_channels)
+
+            # Save results to files
             import torch
             import torchaudio
-            from demucs.pretrained import get_model
-            from demucs.apply import apply_model
 
-            # Determine device
-            device = job.config.gpu.device if torch.cuda.is_available() else "cpu"
-            self.logger.info(f"Using device: {device}")
+            vocals_tensor = torch.from_numpy(result.vocals)
+            background_tensor = torch.from_numpy(result.background)
 
-            # Load model
-            self.logger.info(f"Loading Demucs model: {config.model}")
-            model = get_model(config.model)
-            model.to(device)
-            model.eval()
-
-            # Load audio
-            self.logger.info(f"Loading audio: {input_path}")
-            waveform, sample_rate = torchaudio.load(str(input_path))
-
-            # Demucs expects stereo, convert if mono
-            if waveform.shape[0] == 1:
-                waveform = waveform.repeat(2, 1)
-
-            # Add batch dimension
-            waveform = waveform.unsqueeze(0).to(device)
-
-            # Apply model
-            self.logger.info("Running source separation...")
-            with torch.no_grad():
-                sources = apply_model(
-                    model,
-                    waveform,
-                    shifts=config.shifts,
-                    overlap=config.overlap,
-                    device=device,
-                )
-
-            # Demucs htdemucs outputs: drums, bass, other, vocals
-            # Index 3 is vocals
-            source_names = model.sources
-            vocals_idx = source_names.index("vocals")
-
-            # Extract vocals and combine others for background
-            vocals = sources[0, vocals_idx]  # Shape: [2, samples]
-
-            # Combine non-vocal sources for background
-            background_indices = [i for i in range(len(source_names)) if i != vocals_idx]
-            background = sources[0, background_indices].sum(dim=0)
-
-            # Convert to mono if configured
-            if job.config.pipeline.extract_audio.channels == 1:
-                vocals = vocals.mean(dim=0, keepdim=True)
-                background = background.mean(dim=0, keepdim=True)
-
-            # Move to CPU for saving
-            vocals = vocals.cpu()
-            background = background.cpu()
-
-            # Save outputs
-            self.logger.info(f"Saving vocals to: {vocals_path}")
-            torchaudio.save(
-                str(vocals_path),
-                vocals,
-                sample_rate,
-            )
-
-            self.logger.info(f"Saving background to: {no_vocals_path}")
-            torchaudio.save(
-                str(no_vocals_path),
-                background,
-                sample_rate,
-            )
-
-            # Clear GPU memory
-            del model, waveform, sources
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
+            torchaudio.save(str(vocals_path), vocals_tensor, result.sample_rate)
+            torchaudio.save(str(no_vocals_path), background_tensor, result.sample_rate)
 
             # Register artifacts
             job.add_artifact(
                 name="vocals",
                 path=vocals_path,
                 stage=self.name,
-                metadata={"sample_rate": sample_rate},
+                metadata={"sample_rate": result.sample_rate},
             )
 
             job.add_artifact(
                 name="no_vocals",
                 path=no_vocals_path,
                 stage=self.name,
-                metadata={"sample_rate": sample_rate},
+                metadata={"sample_rate": result.sample_rate},
             )
 
             return StageResult.ok(
@@ -145,7 +87,7 @@ class SeparateVocalsStage(BaseStage):
                 metrics={
                     "vocals_size_bytes": vocals_path.stat().st_size,
                     "background_size_bytes": no_vocals_path.stat().st_size,
-                    "device": device,
+                    "device": demucs.device or "cpu",
                 },
             )
 

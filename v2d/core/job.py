@@ -17,6 +17,8 @@ from v2d.core.state import JobState, StateMachine
 from v2d.io.file_manager import FileManager, JobFileManager
 from v2d.io.integrity import compute_checksum
 from v2d.io.manifest import Manifest
+from v2d.resources.manager import ResourceManager
+from v2d.models.base import ModelRegistry
 
 
 class JobError(Exception):
@@ -38,6 +40,8 @@ class Job:
     - Dedicated directory for all files
     - Manifest tracking all state and artifacts
     - State machine for lifecycle management
+    - Resource manager for GPU/memory allocation
+    - Model registry for managing ML models
     """
 
     def __init__(
@@ -74,6 +78,12 @@ class Job:
 
         # Manifest (loaded or created)
         self._manifest: Manifest | None = None
+
+        # Resource manager for GPU/memory allocation
+        self.resource_manager = ResourceManager(config)
+
+        # Model registry for managing ML models
+        self.model_registry = ModelRegistry(self.resource_manager)
 
     @property
     def state(self) -> JobState:
@@ -179,6 +189,10 @@ class Job:
         self._manifest.output_path = str(output_path)
         self._save_manifest()
 
+        # Unload all models and cleanup resources
+        self.model_registry.unload_all()
+        self.resource_manager.cleanup()
+
     def fail(self, error: str) -> None:
         """
         Mark job as failed.
@@ -212,6 +226,10 @@ class Job:
         self._state_machine.transition(JobState.CANCELLED)
         self._manifest.state = self.state.value
         self._save_manifest()
+
+        # Cleanup resources
+        self.model_registry.unload_all()
+        self.resource_manager.cleanup()
 
     def add_artifact(
         self,
@@ -302,7 +320,24 @@ class Job:
         Args:
             keep_checkpoints: Whether to preserve checkpoints
         """
+        # Unload models first
+        self.model_registry.unload_all()
+        self.resource_manager.cleanup()
+
+        # Then cleanup files
         self.files.cleanup_all(keep_checkpoints=keep_checkpoints)
+
+    def get_model(self, name: str):
+        """
+        Get a model from the registry.
+
+        Args:
+            name: Model name
+
+        Returns:
+            Model instance
+        """
+        return self.model_registry.get(name)
 
     @classmethod
     def create(

@@ -12,6 +12,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 
 from v2d.core.job import Job
+from v2d.models.marian import MarianModel
 from v2d.stages.base import BaseStage, StageResult, ResourceRequirements
 
 
@@ -57,10 +58,6 @@ class TranslateStage(BaseStage):
         self.logger.info(f"Translating with model: {config.model}")
 
         try:
-            # Import here to avoid loading at module level
-            from transformers import MarianMTModel, MarianTokenizer
-            import torch
-
             # Load transcript
             with open(transcript_path, "r", encoding="utf-8") as f:
                 transcript_data = json.load(f)
@@ -70,83 +67,45 @@ class TranslateStage(BaseStage):
             if not segments:
                 return StageResult.fail("No segments to translate")
 
-            # Determine device
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-            self.logger.info(f"Using device: {device}")
+            # Get or create Marian model from registry
+            marian = job.model_registry.get_or_create(
+                "marian",
+                MarianModel,
+                resource_manager=job.resource_manager,
+                model_name=config.model,
+                max_length=config.max_length,
+            )
 
-            # Load model and tokenizer
-            self.logger.info(f"Loading MarianMT model: {config.model}")
-            tokenizer = MarianTokenizer.from_pretrained(config.model)
-            model = MarianMTModel.from_pretrained(config.model)
-            model.to(device)
-            model.eval()
+            self.logger.info(f"Translating {len(segments)} segments...")
 
-            # Translate each segment
+            # Translate using the model wrapper
+            translated_results = marian.translate_segments(segments, batch_size=8)
+
+            # Convert to our segment format
             translated_segments: list[TranslatedSegment] = []
             total_original_chars = 0
             total_translated_chars = 0
 
-            self.logger.info(f"Translating {len(segments)} segments...")
+            for result in translated_results:
+                orig_len = len(result["original_text"])
+                trans_len = len(result["translated_text"])
 
-            # Process in batches for efficiency
-            batch_size = 8
-            for i in range(0, len(segments), batch_size):
-                batch = segments[i:i + batch_size]
-                texts = [seg["text"] for seg in batch]
+                total_original_chars += orig_len
+                total_translated_chars += trans_len
 
-                # Skip empty texts
-                texts = [t if t.strip() else "..." for t in texts]
-
-                # Tokenize
-                inputs = tokenizer(
-                    texts,
-                    return_tensors="pt",
-                    padding=True,
-                    truncation=True,
-                    max_length=config.max_length,
-                ).to(device)
-
-                # Generate translation
-                with torch.no_grad():
-                    outputs = model.generate(
-                        **inputs,
-                        max_length=config.max_length,
-                        num_beams=4,
-                        early_stopping=True,
-                    )
-
-                # Decode
-                translations = tokenizer.batch_decode(
-                    outputs,
-                    skip_special_tokens=True,
+                trans_seg = TranslatedSegment(
+                    id=result["id"],
+                    start=result["start"],
+                    end=result["end"],
+                    original_text=result["original_text"],
+                    translated_text=result["translated_text"],
+                    char_ratio=result["char_ratio"],
                 )
+                translated_segments.append(trans_seg)
 
-                # Create translated segments
-                for j, (seg, translation) in enumerate(zip(batch, translations)):
-                    original = seg["text"]
-                    translated = translation.strip()
-
-                    # Calculate character ratio
-                    orig_len = len(original)
-                    trans_len = len(translated)
-                    ratio = trans_len / orig_len if orig_len > 0 else 1.0
-
-                    total_original_chars += orig_len
-                    total_translated_chars += trans_len
-
-                    trans_seg = TranslatedSegment(
-                        id=seg["id"],
-                        start=seg["start"],
-                        end=seg["end"],
-                        original_text=original,
-                        translated_text=translated,
-                        char_ratio=ratio,
-                    )
-                    translated_segments.append(trans_seg)
-
-                    self.logger.debug(
-                        f"[{trans_seg.start:.2f}s] {original} -> {translated}"
-                    )
+                self.logger.debug(
+                    f"[{trans_seg.start:.2f}s] {result['original_text']} -> {result['translated_text']}"
+                )
 
             # Calculate overall metrics
             overall_ratio = (
@@ -174,11 +133,6 @@ class TranslateStage(BaseStage):
 
             with open(translation_path, "w", encoding="utf-8") as f:
                 json.dump(translation_data, f, ensure_ascii=False, indent=2)
-
-            # Clean up model
-            del model, tokenizer
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
             # Register artifact
             job.add_artifact(

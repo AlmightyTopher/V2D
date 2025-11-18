@@ -12,6 +12,7 @@ from dataclasses import dataclass, asdict
 from pathlib import Path
 
 from v2d.core.job import Job
+from v2d.models.whisper import WhisperModel
 from v2d.stages.base import BaseStage, StageResult, ResourceRequirements
 
 
@@ -55,54 +56,34 @@ class TranscribeStage(BaseStage):
         self.logger.info(f"Transcribing with Whisper {config.model_size}")
 
         try:
-            # Import here to avoid loading at module level
-            from faster_whisper import WhisperModel
-
-            # Determine device
-            import torch
-            device = "cuda" if torch.cuda.is_available() else "cpu"
-
-            # Load model
-            self.logger.info(f"Loading Whisper model: {config.model_size}")
-            model = WhisperModel(
-                config.model_size,
-                device=device,
+            # Get or create Whisper model from registry
+            whisper = job.model_registry.get_or_create(
+                "whisper",
+                WhisperModel,
+                resource_manager=job.resource_manager,
+                model_size=config.model_size,
                 compute_type=config.compute_type,
-            )
-
-            # Transcribe
-            self.logger.info(f"Transcribing: {vocals_path}")
-            segments_iter, info = model.transcribe(
-                str(vocals_path),
-                language="ja",  # Japanese input
                 beam_size=config.beam_size,
                 vad_filter=config.vad_filter,
-                vad_parameters={
-                    "min_silence_duration_ms": 500,
-                    "speech_pad_ms": 200,
-                },
             )
 
-            # Collect segments
+            # Transcribe using the model wrapper
+            result = whisper.transcribe(vocals_path, language="ja")
+
+            # Convert to our segment format
             segments: list[TranscriptSegment] = []
             total_confidence = 0.0
 
-            for i, segment in enumerate(segments_iter):
-                # Calculate average confidence from words if available
-                if hasattr(segment, 'words') and segment.words:
-                    confidence = sum(w.probability for w in segment.words) / len(segment.words)
-                else:
-                    confidence = 0.9  # Default confidence
-
-                seg = TranscriptSegment(
-                    id=i,
-                    start=segment.start,
-                    end=segment.end,
-                    text=segment.text.strip(),
-                    confidence=confidence,
+            for seg in result.segments:
+                transcript_seg = TranscriptSegment(
+                    id=seg.id,
+                    start=seg.start,
+                    end=seg.end,
+                    text=seg.text,
+                    confidence=seg.confidence,
                 )
-                segments.append(seg)
-                total_confidence += confidence
+                segments.append(transcript_seg)
+                total_confidence += seg.confidence
 
                 self.logger.debug(
                     f"[{seg.start:.2f}s - {seg.end:.2f}s] {seg.text}"
@@ -120,19 +101,14 @@ class TranscribeStage(BaseStage):
 
             # Save transcript
             transcript_data = {
-                "language": info.language,
-                "language_probability": info.language_probability,
-                "duration": info.duration,
+                "language": result.language,
+                "language_probability": result.language_probability,
+                "duration": result.duration,
                 "segments": [asdict(s) for s in segments],
             }
 
             with open(transcript_path, "w", encoding="utf-8") as f:
                 json.dump(transcript_data, f, ensure_ascii=False, indent=2)
-
-            # Clean up model
-            del model
-            if torch.cuda.is_available():
-                torch.cuda.empty_cache()
 
             # Register artifact
             job.add_artifact(
@@ -141,8 +117,8 @@ class TranscribeStage(BaseStage):
                 stage=self.name,
                 metadata={
                     "segment_count": len(segments),
-                    "language": info.language,
-                    "duration": info.duration,
+                    "language": result.language,
+                    "duration": result.duration,
                     "average_confidence": avg_confidence,
                 },
             )
@@ -151,10 +127,10 @@ class TranscribeStage(BaseStage):
                 artifacts=["transcript"],
                 metrics={
                     "segment_count": len(segments),
-                    "audio_duration": info.duration,
+                    "audio_duration": result.duration,
                     "average_confidence": avg_confidence,
-                    "language": info.language,
-                    "language_probability": info.language_probability,
+                    "language": result.language,
+                    "language_probability": result.language_probability,
                 },
             )
 
