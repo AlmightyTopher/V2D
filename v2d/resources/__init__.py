@@ -1,1 +1,63 @@
 """Resource management for GPU and memory."""
+
+from v2d.resources.gpu import (
+    is_cuda_available,
+    get_device_count,
+    get_gpu_info,
+    get_memory_status,
+    get_free_vram,
+    get_total_vram,
+    clear_cuda_cache,
+    get_optimal_device,
+    GPUInfo,
+    GPUMemoryStatus,
+)
+from v2d.resources.memory import (
+    get_memory_status as get_ram_status,
+    get_available_ram,
+    get_total_ram,
+    get_disk_status,
+    get_free_disk,
+    check_memory_available,
+    check_disk_available,
+    MemoryStatus,
+    DiskStatus,
+)
+from v2d.resources.manager import (
+    ResourceManager,
+    ResourceError,
+    InsufficientVRAMError,
+    InsufficientRAMError,
+    InsufficientDiskError,
+    VRAMAllocation,
+    ResourceSession,
+)
+
+__all__ = [
+    "is_cuda_available",
+    "get_device_count",
+    "get_gpu_info",
+    "get_memory_status",
+    "get_free_vram",
+    "get_total_vram",
+    "clear_cuda_cache",
+    "get_optimal_device",
+    "GPUInfo",
+    "GPUMemoryStatus",
+    "get_ram_status",
+    "get_available_ram",
+    "get_total_ram",
+    "get_disk_status",
+    "get_free_disk",
+    "check_memory_available",
+    "check_disk_available",
+    "MemoryStatus",
+    "DiskStatus",
+    "ResourceManager",
+    "ResourceError",
+    "InsufficientVRAMError",
+    "InsufficientRAMError",
+    "InsufficientDiskError",
+    "VRAMAllocation",
+    "ResourceSession",
+]
